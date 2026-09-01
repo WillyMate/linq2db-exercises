@@ -19,17 +19,6 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<GroceryDatabase>();
     GrocerySeed.EnsureSeeded(db);
-    db.CreateTable<MyEntity>(tableOptions:TableOptions.CreateIfNotExists);
-    db.Insert(new MyEntity()
-    {
-        Id = "asælkdsa" + new Random().Next(),
-        MyProp = "Value"
-    });
-    db.Insert(new MyEntity()
-    {
-        Id = "asælkdsa" + new Random().Next(),
-        MyProp = "Not value"
-    });
 }
 
 app.UseExceptionHandler(handler => handler.Run(async context =>
