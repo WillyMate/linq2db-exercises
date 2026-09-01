@@ -10,6 +10,299 @@ namespace API.Controllers;
 public partial class GroceriesController
 {
     /// <summary>
+    /// Takes an item out of the range. Idempotent: discontinuing something already discontinued is
+    /// a no-op, not an error — the caller asked for a state, and that state already holds.
+    /// </summary>
+    /// <exception cref="NotFoundException">No row has that id.</exception>
+    [HttpPost(nameof(Discontinue))]
+    public void Discontinue([FromQuery] Guid id)
+    {
+        throw new NotImplementedException();
+    }
+
+    #region Tests: Discontinue
+
+    public class DiscontinueTests : GroceryTest
+    {
+        [Fact]
+        public void Flags_the_row()
+        {
+            Controller.Discontinue(GrocerySeed.IdOf(1));
+            Assert.True(Row(GrocerySeed.IdOf(1)).IsDiscontinued);
+        }
+
+        [Fact]
+        public void Doing_it_twice_is_fine()
+        {
+            Controller.Discontinue(GrocerySeed.IdOf(1));
+            Controller.Discontinue(GrocerySeed.IdOf(1));
+            Assert.True(Row(GrocerySeed.IdOf(1)).IsDiscontinued);
+        }
+
+        [Fact]
+        public void Removes_it_from_the_category_listing()
+        {
+            Controller.Discontinue(GrocerySeed.IdOf(1));
+            Assert.DoesNotContain(Rows.Where(x => x.Category == "Dairy" && !x.IsDiscontinued).ToList(), x => x.Id == GrocerySeed.IdOf(1));
+        }
+
+        [Fact]
+        public void Throws_for_an_unknown_id()
+        {
+            Assert.Throws<NotFoundException>(() => Controller.Discontinue(Guid.NewGuid()));
+        }
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Puts a discontinued item back in the range. Idempotent, exactly like
+    /// <see cref="Discontinue"/>.
+    /// </summary>
+    /// <exception cref="NotFoundException">No row has that id.</exception>
+    [HttpPost(nameof(Reactivate))]
+    public void Reactivate([FromQuery] Guid id)
+    {
+        throw new NotImplementedException();
+    }
+
+    #region Tests: Reactivate
+
+    public class ReactivateTests : GroceryTest
+    {
+        [Fact]
+        public void Brings_the_row_back()
+        {
+            var rice = Row("Basmati Rice 1kg");
+            Controller.Reactivate(rice.Id);
+            Assert.Contains(Rows.Where(x => x.Category == "Pantry" && !x.IsDiscontinued).ToList(), x => x.Id == rice.Id);
+        }
+
+        [Fact]
+        public void Undoes_a_discontinue()
+        {
+            Rows.Where(x => x.Id == GrocerySeed.IdOf(1)).Set(x => x.IsDiscontinued, true).Update();
+            Controller.Reactivate(GrocerySeed.IdOf(1));
+            Assert.False(Row(GrocerySeed.IdOf(1)).IsDiscontinued);
+        }
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Adds stock to every item in a category, in one statement. Discontinued items are skipped —
+    /// you do not reorder something you stopped selling.
+    /// </summary>
+    /// <returns>How many rows were changed. 5 for "Dairy", 0 for an unknown category.</returns>
+    /// <exception cref="ValidationException"><paramref name="amount"/> is below 1, or the category is blank.</exception>
+    [HttpPost(nameof(Restock))]
+    public int Restock([FromQuery] string category, [FromQuery] int amount)
+    {
+        throw new NotImplementedException();
+    }
+
+    #region Tests: Restock
+
+    public class RestockTests : GroceryTest
+    {
+        [Fact]
+        public void Adds_to_every_row_in_the_category()
+        {
+            var before = Rows.Where(x => x.Category == "Dairy").ToList().ToDictionary(x => x.Id, x => x.StockCount);
+            Assert.Equal(5, Controller.Restock("Dairy", 50));
+            foreach (var item in Rows.Where(x => x.Category == "Dairy").ToList())
+                Assert.Equal(before[item.Id] + 50, item.StockCount);
+        }
+
+        [Fact]
+        public void Skips_discontinued_rows()
+        {
+            Assert.Equal(4, Controller.Restock("Pantry", 10));
+            Assert.Equal(0, Row("Basmati Rice 1kg").StockCount);
+        }
+
+        [Fact]
+        public void An_unknown_category_changes_nothing()
+        {
+            Assert.Equal(0, Controller.Restock("Nonsense", 10));
+        }
+
+        [Fact]
+        public void Throws_on_a_nonsense_amount()
+        {
+            Assert.Throws<ValidationException>(() => Controller.Restock("Dairy", 0));
+            Assert.Throws<ValidationException>(() => Controller.Restock(" ", 10));
+        }
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Ends every discount campaign in a category by writing null back into
+    /// <see cref="GroceryItem.DiscountPercent"/>. Only rows that actually carry a discount are
+    /// touched, so a second run reports 0.
+    /// </summary>
+    /// <returns>How many rows were changed.</returns>
+    /// <exception cref="ValidationException">The category is blank.</exception>
+    [HttpPost(nameof(ClearDiscounts))]
+    public int ClearDiscounts([FromQuery] string category)
+    {
+        throw new NotImplementedException();
+    }
+
+    #region Tests: ClearDiscounts
+
+    public class ClearDiscountsTests : GroceryTest
+    {
+        [Fact]
+        public void Writes_null_back_into_the_column()
+        {
+            Assert.Equal(2, Controller.ClearDiscounts("Dairy"));
+            Assert.All(Rows.Where(x => x.Category == "Dairy").ToList(), x => Assert.Null(x.DiscountPercent));
+        }
+
+        [Fact]
+        public void Running_it_again_reports_nothing_to_do()
+        {
+            Controller.ClearDiscounts("Dairy");
+            Assert.Equal(0, Controller.ClearDiscounts("Dairy"));
+        }
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Starts a discount campaign on a category. Only rows that are <em>not already discounted</em>
+    /// are touched, so running the same campaign twice does not deepen an existing discount and the
+    /// second run reports 0 rows. Discontinued rows are skipped.
+    /// </summary>
+    /// <param name="percent">Above 0 and at most 100.</param>
+    /// <returns>How many rows were changed.</returns>
+    /// <exception cref="ValidationException">The percent is outside the range, or the category is blank.</exception>
+    [HttpPost(nameof(ApplyDiscount))]
+    public int ApplyDiscount([FromQuery] string category, [FromQuery] decimal percent)
+    {
+        throw new NotImplementedException();
+    }
+
+    #region Tests: ApplyDiscount
+
+    public class ApplyDiscountTests : GroceryTest
+    {
+        [Fact]
+        public void Discounts_only_the_undiscounted_rows()
+        {
+            Assert.Equal(2, Controller.ApplyDiscount("Frozen", 25m));
+            Assert.All(Rows.Where(x => x.Category == "Frozen").ToList(), x => Assert.NotNull(x.DiscountPercent));
+        }
+
+        [Fact]
+        public void Running_it_again_changes_nothing()
+        {
+            Controller.ApplyDiscount("Frozen", 25m);
+            Assert.Equal(0, Controller.ApplyDiscount("Frozen", 50m));
+            Assert.Equal(15m, Row("Pepperoni Pizza").DiscountPercent);
+        }
+
+        [Fact]
+        public void Throws_on_a_nonsense_percent()
+        {
+            Assert.Throws<ValidationException>(() => Controller.ApplyDiscount("Frozen", 0m));
+            Assert.Throws<ValidationException>(() => Controller.ApplyDiscount("Frozen", 101m));
+        }
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Housekeeping: drops every row that is past its best-before date <em>and</em> has no stock
+    /// left. An expired item still sitting on the shelf is a problem for a human, not for a
+    /// <c>DELETE</c>.
+    /// </summary>
+    /// <returns>How many rows were removed. 3 on fresh seed data.</returns>
+    [HttpDelete(nameof(DeleteExpired))]
+    public int DeleteExpired()
+    {
+        throw new NotImplementedException();
+    }
+
+    #region Tests: DeleteExpired
+
+    public class DeleteExpiredTests : GroceryTest
+    {
+        [Fact]
+        public void Removes_expired_rows_that_are_sold_out()
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            Assert.Equal(3, Controller.DeleteExpired());
+            Assert.Equal(29, RowCount);
+            Assert.False(Rows.Any(x => x.BestBefore != null && x.BestBefore < today));
+        }
+
+        [Fact]
+        public void Running_it_again_finds_nothing()
+        {
+            Controller.DeleteExpired();
+            Assert.Equal(0, Controller.DeleteExpired());
+        }
+
+        [Fact]
+        public void Keeps_expired_rows_that_still_have_stock()
+        {
+            Rows.Where(x => x.Category == "Dairy").Set(x => x.StockCount, x => x.StockCount + 5).Update();
+            Assert.Equal(2, Controller.DeleteExpired());
+            Assert.True(Rows.Any(x => x.Name == "Havarti Cheese 400g"));
+        }
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Removes a row for good — but only when it is safe to: an item still holding stock must not
+    /// vanish from the books. Discontinue it and sell the rest first.
+    /// </summary>
+    /// <exception cref="NotFoundException">No row has that id, including when it was already deleted.</exception>
+    /// <exception cref="ConflictException"><see cref="GroceryItem.StockCount"/> is above zero.</exception>
+    [HttpDelete(nameof(Delete))]
+    public void Delete([FromQuery] Guid id)
+    {
+        throw new NotImplementedException();
+    }
+
+    #region Tests: Delete
+
+    public class DeleteTests : GroceryTest
+    {
+        private Guid EmptyShelf() => Rows.First(x => x.StockCount == 0).Id;
+
+        [Fact]
+        public void Removes_an_item_with_no_stock()
+        {
+            var id = EmptyShelf();
+            Controller.Delete(id);
+            Assert.Equal(31, RowCount);
+            Assert.False(RowExists(id));
+        }
+
+        [Fact]
+        public void Refuses_while_stock_remains()
+        {
+            Assert.Throws<ConflictException>(() => Controller.Delete(GrocerySeed.IdOf(1)));
+            Assert.Equal(32, RowCount);
+        }
+
+        [Fact]
+        public void Deleting_twice_reports_it_is_gone()
+        {
+            var id = EmptyShelf();
+            Controller.Delete(id);
+            Assert.Throws<NotFoundException>(() => Controller.Delete(id));
+        }
+    }
+
+    #endregion
+
+    /// <summary>
     /// Adds a new item to the catalogue.
     /// </summary>
     /// <remarks>
@@ -172,6 +465,70 @@ public partial class GroceriesController
             var item = Sample();
             item.Barcode = "5701234000011";
             Assert.Throws<ConflictException>(() => Controller.Create(item));
+        }
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Registers a sale: stock goes down by the quantity, the purchase counter goes up by it, and
+    /// <see cref="GroceryItem.LastPurchasedAtUtc"/> is set to now — all three in a single
+    /// <c>UPDATE</c>. Read the row, change it in C# and write it back and you have written a race
+    /// condition; <c>.Set(x =&gt; x.StockCount, x =&gt; x.StockCount - quantity)</c> lets the
+    /// database do the arithmetic.
+    /// </summary>
+    /// <param name="id">The item being sold.</param>
+    /// <param name="quantity">How many. At least 1.</param>
+    /// <exception cref="ValidationException"><paramref name="quantity"/> is below 1.</exception>
+    /// <exception cref="NotFoundException">No row has that id.</exception>
+    /// <exception cref="ConflictException">There is not enough stock. Nothing is changed.</exception>
+    [HttpPost(nameof(Purchase))]
+    public void Purchase([FromQuery] Guid id, [FromQuery] int quantity = 1)
+    {
+        throw new NotImplementedException();
+    }
+
+    #region Tests: Purchase
+
+    public class PurchaseTests : GroceryTest
+    {
+        [Fact]
+        public void Moves_stock_counter_and_timestamp_together()
+        {
+            var before = Row(GrocerySeed.IdOf(1));
+            Controller.Purchase(GrocerySeed.IdOf(1), 2);
+            var after = Row(GrocerySeed.IdOf(1));
+
+            Assert.Equal(before.StockCount - 2, after.StockCount);
+            Assert.Equal(before.TimesPurchased + 2, after.TimesPurchased);
+            Assert.InRange(after.LastPurchasedAtUtc!.Value, DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(1));
+        }
+
+        [Fact]
+        public void Repeating_it_keeps_subtracting()
+        {
+            var before = Row(GrocerySeed.IdOf(1)).StockCount;
+            Controller.Purchase(GrocerySeed.IdOf(1));
+            Controller.Purchase(GrocerySeed.IdOf(1));
+            Assert.Equal(before - 2, Row(GrocerySeed.IdOf(1)).StockCount);
+        }
+
+        [Fact]
+        public void Refuses_to_oversell_and_changes_nothing()
+        {
+            var before = Row(GrocerySeed.IdOf(1));
+            Assert.Throws<ConflictException>(() => Controller.Purchase(GrocerySeed.IdOf(1), before.StockCount + 1));
+            var after = Row(GrocerySeed.IdOf(1));
+
+            Assert.Equal(before.StockCount, after.StockCount);
+            Assert.Equal(before.TimesPurchased, after.TimesPurchased);
+        }
+
+        [Fact]
+        public void Throws_on_a_nonsense_quantity_or_unknown_id()
+        {
+            Assert.Throws<ValidationException>(() => Controller.Purchase(GrocerySeed.IdOf(1), 0));
+            Assert.Throws<NotFoundException>(() => Controller.Purchase(Guid.NewGuid()));
         }
     }
 
@@ -373,363 +730,6 @@ public partial class GroceriesController
             var item = Fresh();
             item.Barcode = null;
             Assert.Throws<ValidationException>(() => Controller.Upsert(item));
-        }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Registers a sale: stock goes down by the quantity, the purchase counter goes up by it, and
-    /// <see cref="GroceryItem.LastPurchasedAtUtc"/> is set to now — all three in a single
-    /// <c>UPDATE</c>. Read the row, change it in C# and write it back and you have written a race
-    /// condition; <c>.Set(x =&gt; x.StockCount, x =&gt; x.StockCount - quantity)</c> lets the
-    /// database do the arithmetic.
-    /// </summary>
-    /// <param name="id">The item being sold.</param>
-    /// <param name="quantity">How many. At least 1.</param>
-    /// <exception cref="ValidationException"><paramref name="quantity"/> is below 1.</exception>
-    /// <exception cref="NotFoundException">No row has that id.</exception>
-    /// <exception cref="ConflictException">There is not enough stock. Nothing is changed.</exception>
-    [HttpPost(nameof(Purchase))]
-    public void Purchase([FromQuery] Guid id, [FromQuery] int quantity = 1)
-    {
-        throw new NotImplementedException();
-    }
-
-    #region Tests: Purchase
-
-    public class PurchaseTests : GroceryTest
-    {
-        [Fact]
-        public void Moves_stock_counter_and_timestamp_together()
-        {
-            var before = Row(GrocerySeed.IdOf(1));
-            Controller.Purchase(GrocerySeed.IdOf(1), 2);
-            var after = Row(GrocerySeed.IdOf(1));
-
-            Assert.Equal(before.StockCount - 2, after.StockCount);
-            Assert.Equal(before.TimesPurchased + 2, after.TimesPurchased);
-            Assert.InRange(after.LastPurchasedAtUtc!.Value, DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(1));
-        }
-
-        [Fact]
-        public void Repeating_it_keeps_subtracting()
-        {
-            var before = Row(GrocerySeed.IdOf(1)).StockCount;
-            Controller.Purchase(GrocerySeed.IdOf(1));
-            Controller.Purchase(GrocerySeed.IdOf(1));
-            Assert.Equal(before - 2, Row(GrocerySeed.IdOf(1)).StockCount);
-        }
-
-        [Fact]
-        public void Refuses_to_oversell_and_changes_nothing()
-        {
-            var before = Row(GrocerySeed.IdOf(1));
-            Assert.Throws<ConflictException>(() => Controller.Purchase(GrocerySeed.IdOf(1), before.StockCount + 1));
-            var after = Row(GrocerySeed.IdOf(1));
-
-            Assert.Equal(before.StockCount, after.StockCount);
-            Assert.Equal(before.TimesPurchased, after.TimesPurchased);
-        }
-
-        [Fact]
-        public void Throws_on_a_nonsense_quantity_or_unknown_id()
-        {
-            Assert.Throws<ValidationException>(() => Controller.Purchase(GrocerySeed.IdOf(1), 0));
-            Assert.Throws<NotFoundException>(() => Controller.Purchase(Guid.NewGuid()));
-        }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Adds stock to every item in a category, in one statement. Discontinued items are skipped —
-    /// you do not reorder something you stopped selling.
-    /// </summary>
-    /// <returns>How many rows were changed. 5 for "Dairy", 0 for an unknown category.</returns>
-    /// <exception cref="ValidationException"><paramref name="amount"/> is below 1, or the category is blank.</exception>
-    [HttpPost(nameof(Restock))]
-    public int Restock([FromQuery] string category, [FromQuery] int amount)
-    {
-        throw new NotImplementedException();
-    }
-
-    #region Tests: Restock
-
-    public class RestockTests : GroceryTest
-    {
-        [Fact]
-        public void Adds_to_every_row_in_the_category()
-        {
-            var before = Rows.Where(x => x.Category == "Dairy").ToList().ToDictionary(x => x.Id, x => x.StockCount);
-            Assert.Equal(5, Controller.Restock("Dairy", 50));
-            foreach (var item in Rows.Where(x => x.Category == "Dairy").ToList())
-                Assert.Equal(before[item.Id] + 50, item.StockCount);
-        }
-
-        [Fact]
-        public void Skips_discontinued_rows()
-        {
-            Assert.Equal(4, Controller.Restock("Pantry", 10));
-            Assert.Equal(0, Row("Basmati Rice 1kg").StockCount);
-        }
-
-        [Fact]
-        public void An_unknown_category_changes_nothing()
-        {
-            Assert.Equal(0, Controller.Restock("Nonsense", 10));
-        }
-
-        [Fact]
-        public void Throws_on_a_nonsense_amount()
-        {
-            Assert.Throws<ValidationException>(() => Controller.Restock("Dairy", 0));
-            Assert.Throws<ValidationException>(() => Controller.Restock(" ", 10));
-        }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Starts a discount campaign on a category. Only rows that are <em>not already discounted</em>
-    /// are touched, so running the same campaign twice does not deepen an existing discount and the
-    /// second run reports 0 rows. Discontinued rows are skipped.
-    /// </summary>
-    /// <param name="percent">Above 0 and at most 100.</param>
-    /// <returns>How many rows were changed.</returns>
-    /// <exception cref="ValidationException">The percent is outside the range, or the category is blank.</exception>
-    [HttpPost(nameof(ApplyDiscount))]
-    public int ApplyDiscount([FromQuery] string category, [FromQuery] decimal percent)
-    {
-        throw new NotImplementedException();
-    }
-
-    #region Tests: ApplyDiscount
-
-    public class ApplyDiscountTests : GroceryTest
-    {
-        [Fact]
-        public void Discounts_only_the_undiscounted_rows()
-        {
-            Assert.Equal(2, Controller.ApplyDiscount("Frozen", 25m));
-            Assert.All(Rows.Where(x => x.Category == "Frozen").ToList(), x => Assert.NotNull(x.DiscountPercent));
-        }
-
-        [Fact]
-        public void Running_it_again_changes_nothing()
-        {
-            Controller.ApplyDiscount("Frozen", 25m);
-            Assert.Equal(0, Controller.ApplyDiscount("Frozen", 50m));
-            Assert.Equal(15m, Row("Pepperoni Pizza").DiscountPercent);
-        }
-
-        [Fact]
-        public void Throws_on_a_nonsense_percent()
-        {
-            Assert.Throws<ValidationException>(() => Controller.ApplyDiscount("Frozen", 0m));
-            Assert.Throws<ValidationException>(() => Controller.ApplyDiscount("Frozen", 101m));
-        }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Ends every discount campaign in a category by writing null back into
-    /// <see cref="GroceryItem.DiscountPercent"/>. Only rows that actually carry a discount are
-    /// touched, so a second run reports 0.
-    /// </summary>
-    /// <returns>How many rows were changed.</returns>
-    /// <exception cref="ValidationException">The category is blank.</exception>
-    [HttpPost(nameof(ClearDiscounts))]
-    public int ClearDiscounts([FromQuery] string category)
-    {
-        throw new NotImplementedException();
-    }
-
-    #region Tests: ClearDiscounts
-
-    public class ClearDiscountsTests : GroceryTest
-    {
-        [Fact]
-        public void Writes_null_back_into_the_column()
-        {
-            Assert.Equal(2, Controller.ClearDiscounts("Dairy"));
-            Assert.All(Rows.Where(x => x.Category == "Dairy").ToList(), x => Assert.Null(x.DiscountPercent));
-        }
-
-        [Fact]
-        public void Running_it_again_reports_nothing_to_do()
-        {
-            Controller.ClearDiscounts("Dairy");
-            Assert.Equal(0, Controller.ClearDiscounts("Dairy"));
-        }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Takes an item out of the range. Idempotent: discontinuing something already discontinued is
-    /// a no-op, not an error — the caller asked for a state, and that state already holds.
-    /// </summary>
-    /// <exception cref="NotFoundException">No row has that id.</exception>
-    [HttpPost(nameof(Discontinue))]
-    public void Discontinue([FromQuery] Guid id)
-    {
-        throw new NotImplementedException();
-    }
-
-    #region Tests: Discontinue
-
-    public class DiscontinueTests : GroceryTest
-    {
-        [Fact]
-        public void Flags_the_row()
-        {
-            Controller.Discontinue(GrocerySeed.IdOf(1));
-            Assert.True(Row(GrocerySeed.IdOf(1)).IsDiscontinued);
-        }
-
-        [Fact]
-        public void Doing_it_twice_is_fine()
-        {
-            Controller.Discontinue(GrocerySeed.IdOf(1));
-            Controller.Discontinue(GrocerySeed.IdOf(1));
-            Assert.True(Row(GrocerySeed.IdOf(1)).IsDiscontinued);
-        }
-
-        [Fact]
-        public void Removes_it_from_the_category_listing()
-        {
-            Controller.Discontinue(GrocerySeed.IdOf(1));
-            Assert.DoesNotContain(Rows.Where(x => x.Category == "Dairy" && !x.IsDiscontinued).ToList(), x => x.Id == GrocerySeed.IdOf(1));
-        }
-
-        [Fact]
-        public void Throws_for_an_unknown_id()
-        {
-            Assert.Throws<NotFoundException>(() => Controller.Discontinue(Guid.NewGuid()));
-        }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Puts a discontinued item back in the range. Idempotent, exactly like
-    /// <see cref="Discontinue"/>.
-    /// </summary>
-    /// <exception cref="NotFoundException">No row has that id.</exception>
-    [HttpPost(nameof(Reactivate))]
-    public void Reactivate([FromQuery] Guid id)
-    {
-        throw new NotImplementedException();
-    }
-
-    #region Tests: Reactivate
-
-    public class ReactivateTests : GroceryTest
-    {
-        [Fact]
-        public void Brings_the_row_back()
-        {
-            var rice = Row("Basmati Rice 1kg");
-            Controller.Reactivate(rice.Id);
-            Assert.Contains(Rows.Where(x => x.Category == "Pantry" && !x.IsDiscontinued).ToList(), x => x.Id == rice.Id);
-        }
-
-        [Fact]
-        public void Undoes_a_discontinue()
-        {
-            Rows.Where(x => x.Id == GrocerySeed.IdOf(1)).Set(x => x.IsDiscontinued, true).Update();
-            Controller.Reactivate(GrocerySeed.IdOf(1));
-            Assert.False(Row(GrocerySeed.IdOf(1)).IsDiscontinued);
-        }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Removes a row for good — but only when it is safe to: an item still holding stock must not
-    /// vanish from the books. Discontinue it and sell the rest first.
-    /// </summary>
-    /// <exception cref="NotFoundException">No row has that id, including when it was already deleted.</exception>
-    /// <exception cref="ConflictException"><see cref="GroceryItem.StockCount"/> is above zero.</exception>
-    [HttpDelete(nameof(Delete))]
-    public void Delete([FromQuery] Guid id)
-    {
-        throw new NotImplementedException();
-    }
-
-    #region Tests: Delete
-
-    public class DeleteTests : GroceryTest
-    {
-        private Guid EmptyShelf() => Rows.First(x => x.StockCount == 0).Id;
-
-        [Fact]
-        public void Removes_an_item_with_no_stock()
-        {
-            var id = EmptyShelf();
-            Controller.Delete(id);
-            Assert.Equal(31, RowCount);
-            Assert.False(RowExists(id));
-        }
-
-        [Fact]
-        public void Refuses_while_stock_remains()
-        {
-            Assert.Throws<ConflictException>(() => Controller.Delete(GrocerySeed.IdOf(1)));
-            Assert.Equal(32, RowCount);
-        }
-
-        [Fact]
-        public void Deleting_twice_reports_it_is_gone()
-        {
-            var id = EmptyShelf();
-            Controller.Delete(id);
-            Assert.Throws<NotFoundException>(() => Controller.Delete(id));
-        }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Housekeeping: drops every row that is past its best-before date <em>and</em> has no stock
-    /// left. An expired item still sitting on the shelf is a problem for a human, not for a
-    /// <c>DELETE</c>.
-    /// </summary>
-    /// <returns>How many rows were removed. 3 on fresh seed data.</returns>
-    [HttpDelete(nameof(DeleteExpired))]
-    public int DeleteExpired()
-    {
-        throw new NotImplementedException();
-    }
-
-    #region Tests: DeleteExpired
-
-    public class DeleteExpiredTests : GroceryTest
-    {
-        [Fact]
-        public void Removes_expired_rows_that_are_sold_out()
-        {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
-            Assert.Equal(3, Controller.DeleteExpired());
-            Assert.Equal(29, RowCount);
-            Assert.False(Rows.Any(x => x.BestBefore != null && x.BestBefore < today));
-        }
-
-        [Fact]
-        public void Running_it_again_finds_nothing()
-        {
-            Controller.DeleteExpired();
-            Assert.Equal(0, Controller.DeleteExpired());
-        }
-
-        [Fact]
-        public void Keeps_expired_rows_that_still_have_stock()
-        {
-            Rows.Where(x => x.Category == "Dairy").Set(x => x.StockCount, x => x.StockCount + 5).Update();
-            Assert.Equal(2, Controller.DeleteExpired());
-            Assert.True(Rows.Any(x => x.Name == "Havarti Cheese 400g"));
         }
     }
 
