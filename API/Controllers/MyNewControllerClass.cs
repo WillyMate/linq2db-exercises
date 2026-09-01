@@ -14,31 +14,42 @@ public class MyControllerClass(GroceryDatabase db) : ControllerBase
 {
     public List<MyEntitiy> Entities = new List<MyEntitiy>()
     {
-        new MyEntitiy() 
-        { 
+        new MyEntitiy()
+        {
             Id = "id 1",
             MyProperty = "Value 1",
             SomeNumber = 42
         },
-        new MyEntitiy() 
-        { 
+        new MyEntitiy()
+        {
             Id = "id 1",
             MyProperty = "Value 1",
             SomeNumber = 43
         },
     };
-    
+
     [HttpGet(nameof(GetEntityByIdOrThrowException))]
-    public GroceryItem? GetEntityByIdOrThrowException([FromQuery]Guid id)
+    public List<MyEntitiy> GetEntityByIdOrThrowException([FromQuery] int? minPrice)
     {
-        var q = db.Groceries().AsQueryable();
+        var guid = Guid.NewGuid().ToString();
+        Console.WriteLine(guid);
 
-        var result = q
-            .FirstOrDefault(g => g.Id == id);
+        //Validering
+        if (minPrice != null && minPrice < 0)
+            throw new ValidationException("Min price cannot be less than 0");
 
-        // if (result == null)
-        //     throw new ValidationException("not found");
-        //
-        return result;
+        //Lav om til IQueryable
+        var query = Entities.AsQueryable();
+
+        //Filter
+        query = query
+            .Where(myEntity => myEntity.Id == "id 1" || myEntity.Id.Contains("id"))
+            .Where(myEntity => myEntity.SomeNumber < 42);
+
+        //Sortering
+        query = query.OrderByDescending(g => g.SomeNumber);
+
+        //Udfør query gennem .ToList()
+        return query.ToList();
     }
 }
