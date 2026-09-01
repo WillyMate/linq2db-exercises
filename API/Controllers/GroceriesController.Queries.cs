@@ -15,7 +15,12 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(GetAll))]
     public List<GroceryItem> GetAll()
     {
-        throw new NotImplementedException();
+        
+        var q = db.Groceries().AsQueryable();
+        q = q.OrderBy(g => g.Name);
+        return q.ToList();
+        
+        if (q == null) throw new NotImplementedException();
     }
 
     #region Tests: GetAll
@@ -45,7 +50,14 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(Count))]
     public int Count()
     {
-        throw new NotImplementedException();
+        
+        var q = db.Groceries().AsQueryable();
+        var result = q.Count();
+        return result;
+        
+        
+        
+       if (q == null) throw new NotImplementedException();
     }
 
     #region Tests: Count
@@ -72,7 +84,12 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(GetOrganic))]
     public List<GroceryItem> GetOrganic()
     {
-        throw new NotImplementedException();
+        
+        var q = db.Groceries().AsQueryable();
+        var result = q.Where(g => g.IsOrganic).ToList();
+        return result;
+        
+        if (q == null) throw new NotImplementedException();
     }
 
     #region Tests: GetOrganic
@@ -135,7 +152,12 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(GetOutOfStock))]
     public List<GroceryItem> GetOutOfStock()
     {
-        throw new NotImplementedException();
+        
+        var q = db.Groceries().AsQueryable();
+        q = q.Where(g => g.StockCount == 0 && !g.IsDiscontinued);
+        return q.ToList();
+        
+        if (q == null ) throw new NotImplementedException();
     }
 
     #region Tests: GetOutOfStock
@@ -162,7 +184,12 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(GetIncomplete))]
     public List<GroceryItem> GetIncomplete()
     {
-        throw new NotImplementedException();
+        
+        var q =(db.Groceries().AsQueryable());
+        q = q.Where(g => g.Brand == null || g.Barcode == null);
+
+        return q.ToList();
+        
     }
 
     #region Tests: GetIncomplete
@@ -187,7 +214,17 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(GetDiscounted))]
     public List<GroceryItem> GetDiscounted()
     {
-        throw new NotImplementedException();
+
+        var q = (db.Groceries().AsQueryable());
+        q = q.Where(g => g.DiscountPercent != null);
+
+        q = q.OrderByDescending(g => g.DiscountPercent);
+        
+        
+        return q.ToList();
+        
+        if (q == null) throw new NotImplementedException();
+        
     }
 
     #region Tests: GetDiscounted
@@ -218,6 +255,13 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(GetByCategory))]
     public List<GroceryItem> GetByCategory([FromQuery] string category)
     {
+        
+        var q = db.Groceries().AsQueryable();
+        q = q.Where(g => g.Category == category && !g.IsDiscontinued);
+        q = q.OrderBy(g => g.PriceDkk);
+
+        return q.ToList();
+        
         throw new NotImplementedException();
     }
 
@@ -302,7 +346,10 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(Exists))]
     public bool Exists([FromQuery] string barcode)
     {
-        throw new NotImplementedException();
+        
+        var q = db.Groceries().AsQueryable();
+        q = q.Where(g => g.Barcode == barcode);
+        return q.ToList().Any();
     }
 
     #region Tests: Exists
@@ -328,7 +375,10 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(GetByBarcode))]
     public GroceryItem GetByBarcode([FromQuery] string barcode)
     {
-        throw new NotImplementedException();
+        
+        var q = db.Groceries().AsQueryable();
+        q = q.Where(g => g.Barcode == barcode);
+        return q.ToList().FirstOrDefault() ?? throw new NotFoundException("Not found");
     }
 
     #region Tests: GetByBarcode
@@ -366,7 +416,11 @@ public partial class GroceriesController(GroceryDatabase db) : ControllerBase
     [HttpGet(nameof(GetByPriceRange))]
     public List<GroceryItem> GetByPriceRange([FromQuery] decimal? min, [FromQuery] decimal? max)
     {
-        throw new NotImplementedException();
+        
+        var q = db.Groceries().AsQueryable();
+        q = q.Where (g => (!min.HasValue || g.PriceDkk >= min.Value) && (!max.HasValue || g.PriceDkk <= max.Value));
+        q = q.OrderBy(g => g.PriceDkk);
+        return q.ToList();
     }
 
     #region Tests: GetByPriceRange
